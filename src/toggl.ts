@@ -95,7 +95,9 @@ export interface TimeEntry {
   id: number;
   workspace_id: number;
   project_id: number | null;
+  project_name: string | null; // populated when fetched with meta=true
   task_id: number | null;
+  task_name: string | null; // populated when fetched with meta=true (e.g. the Jira key)
   description: string | null;
   start: string;
   stop: string | null;
@@ -120,18 +122,36 @@ export async function listTimeEntries(opts: {
   end_date?: string;
   project_id?: number;
   task_id?: number;
+  exclude_tag?: string;
 }): Promise<TimeEntry[]> {
   // Default to the last 7 days. end_date is exclusive in Toggl Track, so add a day.
   const start = opts.start_date ? passDate(opts.start_date) : isoDaysFromNow(-7);
   const end = opts.end_date ? passDate(opts.end_date) : isoDaysFromNow(1);
-  const qs = new URLSearchParams({ start_date: start, end_date: end });
+  // meta=true enriches each entry with project_name / task_name (the Jira key).
+  const qs = new URLSearchParams({ start_date: start, end_date: end, meta: "true" });
   let entries = await togglFetch<TimeEntry[]>(`/me/time_entries?${qs.toString()}`);
   // /me/time_entries has no project/task query params, so filter client-side.
   if (opts.project_id !== undefined)
     entries = entries.filter((e) => e.project_id === opts.project_id);
   if (opts.task_id !== undefined)
     entries = entries.filter((e) => e.task_id === opts.task_id);
+  if (opts.exclude_tag !== undefined)
+    entries = entries.filter((e) => !(e.tags ?? []).includes(opts.exclude_tag!));
   return entries;
+}
+
+/** Add or remove tag names on an existing entry (tags are auto-created).
+ *  Uses Toggl's tag_action so other tags are preserved. */
+export async function setEntryTags(
+  workspaceId: number,
+  timeEntryId: number,
+  tags: string[],
+  action: "add" | "delete",
+): Promise<TimeEntry> {
+  return togglFetch<TimeEntry>(
+    `/workspaces/${workspaceId}/time_entries/${timeEntryId}`,
+    { method: "PUT", body: JSON.stringify({ tags, tag_action: action }) },
+  );
 }
 
 /** Map of project id -> name, for labelling time-entry output. Best-effort. */

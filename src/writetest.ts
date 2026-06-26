@@ -8,6 +8,7 @@ import {
   defaultWorkspaceId,
   getCurrentTimeEntry,
   stopCurrentTimer,
+  setEntryTags,
 } from "./toggl.js";
 
 async function main() {
@@ -21,6 +22,9 @@ async function main() {
     start: startedAt,
   });
   console.log(`time entry created: id=${te.id}, dur=${te.duration}s, desc="${te.description}"`);
+  // tag it, verify, then it gets deleted below (net no change)
+  const tagged = await setEntryTags(te.workspace_id, te.id, ["mcp-tagtest"], "add");
+  console.log(`tag added: tags=${JSON.stringify(tagged.tags)} (has mcp-tagtest: ${(tagged.tags ?? []).includes("mcp-tagtest")})`);
   try {
     await togglFetch(`/workspaces/${te.workspace_id}/time_entries/${te.id}`, { method: "DELETE" });
     console.log(`time entry deleted: id=${te.id}`);

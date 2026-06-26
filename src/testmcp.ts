@@ -28,7 +28,8 @@ async function main() {
     arguments: { start_date: "2026-06-20", end_date: "2026-06-27" },
   });
   const teText = (te.content as any[])[0]?.text ?? "";
-  console.log("\n[list_time_entries]\n" + teText.split("\n").slice(0, 6).join("\n"));
+  // Print the summary header (entries count + per-day/per-project/per-task rollups).
+  console.log("\n[list_time_entries]\n" + teText.split("\n").slice(0, 14).join("\n"));
 
   // Filter verification: pick a project_id that appears, re-query, assert all match.
   const entries = (te.structuredContent as any)?.entries ?? [];

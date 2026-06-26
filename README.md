@@ -4,12 +4,13 @@ A small local **MCP server** for the [Toggl Track API v9](https://engineering.to
 
 | Tool | What it does |
 |---|---|
-| `list_time_entries` | List your time entries for a date range (defaults to last 7 days), optionally filtered by project and/or task, with per-day, per-project, and total hours. |
+| `list_time_entries` | List your time entries for a date range (defaults to last 7 days), optionally filtered by project/task or excluding a tag, with per-day, per-project, and **per-task** (`task_name`) totals. |
 | `list_projects` | List your projects (to find the `project_id` the write tools need). |
 | `create_task` | Create a task under a project. |
 | `log_time` | Log a completed time entry, or start a running timer. Attach to a project/task. |
 | `current_timer` | Show the currently running timer (with elapsed time), or report none. |
 | `stop_timer` | Stop the running timer (or a specific entry by id). |
+| `tag_time_entry` | Add/remove tags on an entry (e.g. mark `jira-logged` for dedupe). |
 
 All the Toggl quirks are baked in: Basic-auth token handling, `https://api.track.toggl.com/api/v9` base, RFC3339/`YYYY-MM-DD` dates, seconds-based durations, default-workspace resolution.
 
@@ -90,13 +91,16 @@ Once the server is registered, just ask Claude in plain language — it picks th
 
 ### Tool inputs (for direct/programmatic calls)
 
-**`list_time_entries`** — dates accept `YYYY-MM-DD` or RFC3339; `end_date` is exclusive; both default to the last 7 days. Optionally filter by `project_id` and/or `task_id` (filtered client-side, since the Toggl endpoint only takes dates). Output includes per-day and per-project breakdowns with resolved project names.
+**`list_time_entries`** — dates accept `YYYY-MM-DD` or RFC3339; `end_date` is exclusive; both default to the last 7 days. Optionally filter by `project_id` / `task_id`, or `exclude_tag` to skip already-processed entries (all client-side; the Toggl endpoint only takes dates). Each entry includes `project_name` and `task_name` (the Toggl task — e.g. a Jira key); output adds per-day, per-project, and per-task totals, and excludes running timers from totals.
 ```jsonc
 // whole range
 { "start_date": "2026-06-22", "end_date": "2026-06-29" }
 
-// just one project
+// one project
 { "start_date": "2026-06-01", "end_date": "2026-07-01", "project_id": 12345678 }
+
+// a day's entries not yet pushed to Jira
+{ "start_date": "2026-06-26", "end_date": "2026-06-27", "exclude_tag": "jira-logged" }
 ```
 Returns a text summary plus `structuredContent` with `{ count, total_seconds, entries[] }`:
 ```
@@ -129,12 +133,32 @@ Per day:
 ```
 `start` defaults to now (RFC3339 to override). Attach work with `project_id` and/or `task_id`. Optional: `billable`, `tags` (string names).
 
+**`tag_time_entry`** — add (default) or remove tag names on an entry; other tags are preserved.
+```json
+{ "time_entry_id": 12345678, "tags": ["jira-logged"], "action": "add" }
+```
+
 **`current_timer`** — no arguments. Returns the running entry (with elapsed time) or `{ running: false }`.
 
 **`stop_timer`** — no arguments stops whatever is running; or target a specific entry.
 ```json
 { "time_entry_id": 12345678 }
 ```
+
+## Logging time to Jira (end-of-day worklog flow)
+
+If you name each Toggl **task** after a Jira ticket (e.g. `LEGLINK-142`), `task_name` *is* the Jira key — so this server gives you the read + dedupe half of an end-of-day "push my tracked time to Jira worklogs" workflow. The Jira write is done by a **separate Jira MCP** (this server is Toggl-only; make sure yours supports `POST /issue/{key}/worklog`).
+
+The flow Claude runs:
+
+1. **Read** the day's loggable entries, skipping ones already pushed:
+   `list_time_entries { start_date, end_date, exclude_tag: "jira-logged" }`
+   — each entry carries `task_name` (the Jira key), `start`, and `duration` (seconds). Running timers are flagged and excluded from totals; skip them.
+2. **Write** one Jira worklog per entry via your Jira MCP — `task_name` → issue key, `duration` → `timeSpentSeconds`, `start` → `started`, `description` → comment.
+3. **Mark** each pushed entry so it won't be logged twice:
+   `tag_time_entry { time_entry_id, tags: ["jira-logged"], action: "add" }`
+
+Because step 1 filters `exclude_tag: "jira-logged"`, the job is **safe to re-run** — already-logged entries are skipped. Entries with no `task_id` (no Jira ticket) are simply left for you to handle.
 
 ## Smoke test (no MCP client needed)
 

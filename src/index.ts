@@ -11,6 +11,7 @@ import {
   getCurrentTimeEntry,
   stopTimeEntry,
   stopCurrentTimer,
+  setEntryTags,
   defaultWorkspaceId,
   fmtDuration,
   type TimeEntry,
@@ -35,16 +36,18 @@ server.registerTool(
     title: "List time entries",
     description:
       "List the authenticated user's Toggl Track time entries within a date range, " +
-      "optionally filtered to a specific project and/or task. " +
+      "optionally filtered to a specific project and/or task, and optionally excluding entries with a given tag. " +
       "Dates accept YYYY-MM-DD or full RFC3339. end_date is exclusive. " +
-      "Defaults to the last 7 days when omitted. Returns each entry plus per-day, per-project, and total hours. " +
-      "duration is in seconds; a negative duration means the timer is currently running. " +
-      "Use list_projects to find a project_id.",
+      "Defaults to the last 7 days when omitted. Returns each entry (with project_name and task_name) plus " +
+      "per-day, per-project, and per-task (task_name) totals. task_name is the Toggl task — e.g. a Jira ticket key. " +
+      "duration is in seconds; a negative duration means the timer is currently running (exclude those when logging elsewhere). " +
+      "Use exclude_tag to skip already-processed entries (e.g. exclude_tag='jira-logged').",
     inputSchema: {
       start_date: z.string().optional().describe("Range start, YYYY-MM-DD or RFC3339. Default: 7 days ago."),
       end_date: z.string().optional().describe("Range end (exclusive), YYYY-MM-DD or RFC3339. Default: tomorrow."),
       project_id: z.number().int().optional().describe("Only entries on this project (see list_projects)."),
       task_id: z.number().int().optional().describe("Only entries on this task."),
+      exclude_tag: z.string().optional().describe("Skip entries carrying this tag (e.g. 'jira-logged' for dedupe)."),
     },
     annotations: { readOnlyHint: true, openWorldHint: true },
   },
@@ -52,18 +55,23 @@ server.registerTool(
     try {
       const entries = await listTimeEntries(args);
       const names = await projectNameMap();
-      const projLabel = (id: number | null) =>
-        id ? `${names.get(id) ?? `proj ${id}`}` : "(no project)";
+      const projLabel = (e: TimeEntry) =>
+        e.project_name ?? (e.project_id ? names.get(e.project_id) ?? `proj ${e.project_id}` : "(no project)");
+      const taskLabel = (e: TimeEntry) =>
+        e.task_name ?? (e.task_id ? `task ${e.task_id}` : "(no task)");
 
       const byDay = new Map<string, number>();
       const byProject = new Map<string, number>();
+      const byTask = new Map<string, number>();
       let total = 0;
+      let running = 0;
       for (const e of entries) {
+        if (e.duration < 0) running++;
         const secs = e.duration > 0 ? e.duration : 0;
         total += secs;
         byDay.set(e.start.slice(0, 10), (byDay.get(e.start.slice(0, 10)) ?? 0) + secs);
-        const pl = projLabel(e.project_id);
-        byProject.set(pl, (byProject.get(pl) ?? 0) + secs);
+        byProject.set(projLabel(e), (byProject.get(projLabel(e)) ?? 0) + secs);
+        if (e.task_id) byTask.set(taskLabel(e), (byTask.get(taskLabel(e)) ?? 0) + secs);
       }
       const lines = entries
         .slice()
@@ -71,20 +79,22 @@ server.registerTool(
         .map((e: TimeEntry) =>
           `${e.start.slice(0, 16).replace("T", " ")}  ${fmtDuration(e.duration).padEnd(8)}  ` +
           `${e.description ?? "(no description)"}` +
-          `${e.project_id ? `  [${projLabel(e.project_id)}]` : ""}${e.task_id ? `  [task ${e.task_id}]` : ""}`,
+          `${e.task_id ? `  [${taskLabel(e)}]` : ""}  (${projLabel(e)})` +
+          `${(e.tags ?? []).length ? `  #${(e.tags ?? []).join(" #")}` : ""}`,
         );
+      const fmtGroup = (m: Map<string, number>) =>
+        [...m.entries()].sort((a, b) => b[1] - a[1]).map(([k, s]) => `  ${k}: ${fmtDuration(s)}`).join("\n");
       const daySummary = [...byDay.entries()].sort().map(([d, s]) => `  ${d}: ${fmtDuration(s)}`).join("\n");
-      const projSummary = [...byProject.entries()]
-        .sort((a, b) => b[1] - a[1])
-        .map(([p, s]) => `  ${p}: ${fmtDuration(s)}`)
-        .join("\n");
       const filterNote =
-        (args.project_id ? ` · project ${projLabel(args.project_id)}` : "") +
-        (args.task_id ? ` · task ${args.task_id}` : "");
+        (args.project_id ? ` · project ${args.project_id}` : "") +
+        (args.task_id ? ` · task ${args.task_id}` : "") +
+        (args.exclude_tag ? ` · excluding #${args.exclude_tag}` : "") +
+        (running ? ` · ${running} running (excluded from totals)` : "");
       const summary =
         `${entries.length} entries, total ${fmtDuration(total)}${filterNote}\n` +
         (daySummary ? `Per day:\n${daySummary}\n` : "") +
-        (byProject.size > 1 ? `Per project:\n${projSummary}\n` : "") +
+        (byProject.size > 1 ? `Per project:\n${fmtGroup(byProject)}\n` : "") +
+        (byTask.size > 0 ? `Per task:\n${fmtGroup(byTask)}\n` : "") +
         "\n" + lines.join("\n");
       return ok(summary, { count: entries.length, total_seconds: total, entries });
     } catch (e) {
@@ -252,6 +262,40 @@ server.registerTool(
         `Stopped timer (id ${te.id}): logged ${fmtDuration(te.duration)}` +
           `${te.description ? ` — "${te.description}"` : ""}`,
         { stopped: true, entry: te },
+      );
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+// ---- tag_time_entry ---------------------------------------------------------
+
+server.registerTool(
+  "tag_time_entry",
+  {
+    title: "Tag a time entry",
+    description:
+      "Add or remove tag names on an existing time entry (tags are auto-created if new; other tags are preserved). " +
+      "Primary use: mark entries already pushed elsewhere — e.g. add 'jira-logged' after creating a Jira worklog so " +
+      "list_time_entries with exclude_tag='jira-logged' won't surface them again.",
+    inputSchema: {
+      time_entry_id: z.number().int().describe("The time entry to tag."),
+      tags: z.array(z.string()).min(1).describe("Tag names to add or remove."),
+      action: z.enum(["add", "remove"]).optional().describe("add (default) or remove."),
+      workspace_id: z.number().int().optional().describe("Defaults to your default workspace."),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  },
+  async (args) => {
+    try {
+      const ws = args.workspace_id ?? (await defaultWorkspaceId());
+      const action = args.action === "remove" ? "delete" : "add";
+      const te = await setEntryTags(ws, args.time_entry_id, args.tags, action);
+      return ok(
+        `${action === "add" ? "Added" : "Removed"} tag(s) ${args.tags.map((t) => `#${t}`).join(" ")} ` +
+          `on entry ${te.id}. Current tags: ${(te.tags ?? []).map((t) => `#${t}`).join(" ") || "(none)"}`,
+        te,
       );
     } catch (e) {
       return fail(e);
