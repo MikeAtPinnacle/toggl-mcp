@@ -8,6 +8,8 @@ A small local **MCP server** for the [Toggl Track API v9](https://engineering.to
 | `list_projects` | List your projects (to find the `project_id` the write tools need). |
 | `create_task` | Create a task under a project. |
 | `log_time` | Log a completed time entry, or start a running timer. Attach to a project/task. |
+| `current_timer` | Show the currently running timer (with elapsed time), or report none. |
+| `stop_timer` | Stop the running timer (or a specific entry by id). |
 
 All the Toggl quirks are baked in: Basic-auth token handling, `https://api.track.toggl.com/api/v9` base, RFC3339/`YYYY-MM-DD` dates, seconds-based durations, default-workspace resolution.
 
@@ -72,6 +74,8 @@ Once the server is registered, just ask Claude in plain language — it picks th
 | "Add a task called *Write design doc* to the NHSNLink project" | `list_projects` → `create_task` |
 | "Log 90 minutes to the Lantana Group project for *code review*" | `list_projects` → `log_time` |
 | "Start a Toggl timer for *standup*" | `log_time` (running) |
+| "Is a timer running? How long?" | `current_timer` |
+| "Stop my timer" | `stop_timer` |
 
 ### Tool inputs (for direct/programmatic calls)
 
@@ -114,6 +118,13 @@ Per day:
 ```
 `start` defaults to now (RFC3339 to override). Attach work with `project_id` and/or `task_id`. Optional: `billable`, `tags` (string names).
 
+**`current_timer`** — no arguments. Returns the running entry (with elapsed time) or `{ running: false }`.
+
+**`stop_timer`** — no arguments stops whatever is running; or target a specific entry.
+```json
+{ "time_entry_id": 4461488933 }
+```
+
 ## Smoke test (no MCP client needed)
 
 ```powershell
@@ -127,5 +138,6 @@ Prints your default workspace, first projects, and last-7-days entry count if th
 ## Notes
 
 - **stdio server:** logs go to stderr only; stdout is reserved for the MCP protocol.
-- **Running timers:** `log_time` with `start_now: true` (or no `duration_seconds`) starts a timer (`duration = -1`); otherwise it logs a completed entry.
+- **Running timers:** `log_time` with `start_now: true` (or no `duration_seconds`) starts a timer (`duration = -1`); otherwise it logs a completed entry. Stop it with `stop_timer`.
+- **Rate limits:** Toggl throttles aggressively (~1 req/s). The client automatically retries `429`/`5xx` with backoff (honoring `Retry-After`), so bursts of calls degrade gracefully instead of failing.
 - **Upgrade path:** to distribute this without requiring Node on the target machine, repackage as an MCPB bundle.

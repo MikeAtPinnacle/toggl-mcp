@@ -22,9 +22,13 @@ function authHeader(): string {
   return "Basic " + Buffer.from(`${getToken()}:api_token`).toString("base64");
 }
 
+const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+const MAX_ATTEMPTS = 4;
+
 export async function togglFetch<T = any>(
   path: string,
   init: RequestInit = {},
+  attempt = 1,
 ): Promise<T> {
   const res = await fetch(BASE + path, {
     ...init,
@@ -34,6 +38,19 @@ export async function togglFetch<T = any>(
       ...(init.headers ?? {}),
     },
   });
+
+  // Toggl rate-limits aggressively (~1 req/s). Back off on 429 / 5xx and retry,
+  // honoring Retry-After when present, otherwise exponential backoff.
+  if ((res.status === 429 || res.status >= 500) && attempt < MAX_ATTEMPTS) {
+    const retryAfter = Number(res.headers.get("retry-after"));
+    const waitMs =
+      Number.isFinite(retryAfter) && retryAfter > 0
+        ? retryAfter * 1000
+        : Math.min(8000, 400 * 2 ** (attempt - 1));
+    await delay(waitMs);
+    return togglFetch<T>(path, init, attempt + 1);
+  }
+
   const text = await res.text();
   if (!res.ok) {
     const method = (init.method ?? "GET").toUpperCase();
@@ -125,6 +142,29 @@ export async function projectNameMap(): Promise<Map<number, string>> {
   } catch {
     return new Map();
   }
+}
+
+export async function getCurrentTimeEntry(): Promise<TimeEntry | null> {
+  // Returns the running entry, or null when no timer is running.
+  return togglFetch<TimeEntry | null>("/me/time_entries/current");
+}
+
+export async function stopTimeEntry(
+  workspaceId: number,
+  timeEntryId: number,
+): Promise<TimeEntry> {
+  return togglFetch<TimeEntry>(
+    `/workspaces/${workspaceId}/time_entries/${timeEntryId}/stop`,
+    { method: "PATCH" },
+  );
+}
+
+/** Stop whatever timer is currently running. Returns the stopped entry, or null
+ *  if nothing was running. */
+export async function stopCurrentTimer(): Promise<TimeEntry | null> {
+  const current = await getCurrentTimeEntry();
+  if (!current) return null;
+  return stopTimeEntry(current.workspace_id, current.id);
 }
 
 export async function listProjects(active?: boolean): Promise<Project[]> {

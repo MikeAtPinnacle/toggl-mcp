@@ -8,6 +8,9 @@ import {
   projectNameMap,
   createTask,
   logTime,
+  getCurrentTimeEntry,
+  stopTimeEntry,
+  stopCurrentTimer,
   defaultWorkspaceId,
   fmtDuration,
   type TimeEntry,
@@ -181,6 +184,74 @@ server.registerTool(
           `${te.description ? ` — "${te.description}"` : ""}` +
           `${te.project_id ? `  [proj ${te.project_id}]` : ""}${te.task_id ? `  [task ${te.task_id}]` : ""}`,
         te,
+      );
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+// ---- current_timer ----------------------------------------------------------
+
+function describeRunning(te: TimeEntry): string {
+  const elapsed = Math.max(0, Math.floor((Date.now() - new Date(te.start).getTime()) / 1000));
+  return (
+    `Running ${fmtDuration(elapsed)} (since ${te.start.slice(0, 16).replace("T", " ")})` +
+    `${te.description ? ` — "${te.description}"` : ""}` +
+    `${te.project_id ? `  [proj ${te.project_id}]` : ""}${te.task_id ? `  [task ${te.task_id}]` : ""}` +
+    `  (id ${te.id})`
+  );
+}
+
+server.registerTool(
+  "current_timer",
+  {
+    title: "Current running timer",
+    description:
+      "Return the time entry whose timer is currently running (with elapsed time), or report that no timer is running.",
+    inputSchema: {},
+    annotations: { readOnlyHint: true, openWorldHint: true },
+  },
+  async () => {
+    try {
+      const te = await getCurrentTimeEntry();
+      if (!te) return ok("No timer is currently running.", { running: false, entry: null });
+      return ok(describeRunning(te), { running: true, entry: te });
+    } catch (e) {
+      return fail(e);
+    }
+  },
+);
+
+// ---- stop_timer -------------------------------------------------------------
+
+server.registerTool(
+  "stop_timer",
+  {
+    title: "Stop the running timer",
+    description:
+      "Stop a running Toggl Track timer. With no arguments, stops whatever timer is currently running. " +
+      "Pass time_entry_id (and workspace_id) to stop a specific entry. No-op if nothing is running.",
+    inputSchema: {
+      time_entry_id: z.number().int().optional().describe("Specific entry to stop. Default: the current running timer."),
+      workspace_id: z.number().int().optional().describe("Workspace of that entry. Defaults to your default workspace."),
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  },
+  async (args) => {
+    try {
+      let te: TimeEntry | null;
+      if (args.time_entry_id !== undefined) {
+        const ws = args.workspace_id ?? (await defaultWorkspaceId());
+        te = await stopTimeEntry(ws, args.time_entry_id);
+      } else {
+        te = await stopCurrentTimer();
+      }
+      if (!te) return ok("No timer was running; nothing to stop.", { stopped: false, entry: null });
+      return ok(
+        `Stopped timer (id ${te.id}): logged ${fmtDuration(te.duration)}` +
+          `${te.description ? ` — "${te.description}"` : ""}`,
+        { stopped: true, entry: te },
       );
     } catch (e) {
       return fail(e);

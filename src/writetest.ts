@@ -1,6 +1,14 @@
 // Live WRITE test that cleans up after itself: creates a time entry and a task,
 // prints them, then deletes both. Run: node dist/writetest.js (needs TOGGL_API_TOKEN).
-import { logTime, createTask, listProjects, togglFetch, defaultWorkspaceId } from "./toggl.js";
+import {
+  logTime,
+  createTask,
+  listProjects,
+  togglFetch,
+  defaultWorkspaceId,
+  getCurrentTimeEntry,
+  stopCurrentTimer,
+} from "./toggl.js";
 
 async function main() {
   const ws = await defaultWorkspaceId();
@@ -37,7 +45,22 @@ async function main() {
     throw e;
   }
 
-  console.log("\nOK: write paths (log_time, create_task) verified and cleaned up.");
+  // --- running timer: start -> current -> stop -> delete ---
+  const timer = await logTime({ description: "toggl-mcp timer test (auto-deleted)", start_now: true });
+  console.log(`timer started: id=${timer.id}, duration=${timer.duration} (negative => running)`);
+  const current = await getCurrentTimeEntry();
+  console.log(`current_timer reports id=${current?.id} (matches: ${current?.id === timer.id})`);
+  const stopped = await stopCurrentTimer();
+  console.log(`timer stopped: id=${stopped?.id}, logged ${stopped?.duration}s`);
+  try {
+    await togglFetch(`/workspaces/${timer.workspace_id}/time_entries/${timer.id}`, { method: "DELETE" });
+    console.log(`timer entry deleted: id=${timer.id}`);
+  } catch (e) {
+    console.error(`!! FAILED to delete timer entry ${timer.id} — delete it manually:`, e);
+    throw e;
+  }
+
+  console.log("\nOK: write paths (log_time, create_task, stop_timer) verified and cleaned up.");
 }
 
 main().catch((e) => {
