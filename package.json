@@ -13,7 +13,8 @@
     "build": "tsc",
     "watch": "tsc --watch",
     "start": "node dist/index.js",
-    "smoke": "node dist/smoke.js"
+    "smoke": "node dist/smoke.js",
+    "stopcheck": "node dist/stopcheck.js"
   },
   "license": "MIT",
   "dependencies": {
