@@ -1,0 +1,27 @@
+{
+  "name": "toggl-mcp",
+  "version": "0.1.0",
+  "description": "Local MCP server for the Toggl Track API v9 (list time entries, create tasks, log time).",
+  "type": "module",
+  "bin": {
+    "toggl-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "start": "node dist/index.js",
+    "smoke": "node dist/smoke.js"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.1",
+    "typescript": "^6.0.3"
+  }
+}
