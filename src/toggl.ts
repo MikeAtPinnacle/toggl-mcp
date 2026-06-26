@@ -101,12 +101,30 @@ export interface Project {
 export async function listTimeEntries(opts: {
   start_date?: string;
   end_date?: string;
+  project_id?: number;
+  task_id?: number;
 }): Promise<TimeEntry[]> {
   // Default to the last 7 days. end_date is exclusive in Toggl Track, so add a day.
   const start = opts.start_date ? passDate(opts.start_date) : isoDaysFromNow(-7);
   const end = opts.end_date ? passDate(opts.end_date) : isoDaysFromNow(1);
   const qs = new URLSearchParams({ start_date: start, end_date: end });
-  return togglFetch<TimeEntry[]>(`/me/time_entries?${qs.toString()}`);
+  let entries = await togglFetch<TimeEntry[]>(`/me/time_entries?${qs.toString()}`);
+  // /me/time_entries has no project/task query params, so filter client-side.
+  if (opts.project_id !== undefined)
+    entries = entries.filter((e) => e.project_id === opts.project_id);
+  if (opts.task_id !== undefined)
+    entries = entries.filter((e) => e.task_id === opts.task_id);
+  return entries;
+}
+
+/** Map of project id -> name, for labelling time-entry output. Best-effort. */
+export async function projectNameMap(): Promise<Map<number, string>> {
+  try {
+    const ps = await listProjects();
+    return new Map(ps.map((p) => [p.id, p.name]));
+  } catch {
+    return new Map();
+  }
 }
 
 export async function listProjects(active?: boolean): Promise<Project[]> {

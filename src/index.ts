@@ -5,6 +5,7 @@ import { z } from "zod";
 import {
   listTimeEntries,
   listProjects,
+  projectNameMap,
   createTask,
   logTime,
   defaultWorkspaceId,
@@ -30,26 +31,36 @@ server.registerTool(
   {
     title: "List time entries",
     description:
-      "List the authenticated user's Toggl Track time entries within a date range. " +
+      "List the authenticated user's Toggl Track time entries within a date range, " +
+      "optionally filtered to a specific project and/or task. " +
       "Dates accept YYYY-MM-DD or full RFC3339. end_date is exclusive. " +
-      "Defaults to the last 7 days when omitted. Returns each entry plus a per-day and total hours summary. " +
-      "duration is in seconds; a negative duration means the timer is currently running.",
+      "Defaults to the last 7 days when omitted. Returns each entry plus per-day, per-project, and total hours. " +
+      "duration is in seconds; a negative duration means the timer is currently running. " +
+      "Use list_projects to find a project_id.",
     inputSchema: {
       start_date: z.string().optional().describe("Range start, YYYY-MM-DD or RFC3339. Default: 7 days ago."),
       end_date: z.string().optional().describe("Range end (exclusive), YYYY-MM-DD or RFC3339. Default: tomorrow."),
+      project_id: z.number().int().optional().describe("Only entries on this project (see list_projects)."),
+      task_id: z.number().int().optional().describe("Only entries on this task."),
     },
     annotations: { readOnlyHint: true, openWorldHint: true },
   },
   async (args) => {
     try {
       const entries = await listTimeEntries(args);
+      const names = await projectNameMap();
+      const projLabel = (id: number | null) =>
+        id ? `${names.get(id) ?? `proj ${id}`}` : "(no project)";
+
       const byDay = new Map<string, number>();
+      const byProject = new Map<string, number>();
       let total = 0;
       for (const e of entries) {
         const secs = e.duration > 0 ? e.duration : 0;
         total += secs;
-        const day = e.start.slice(0, 10);
-        byDay.set(day, (byDay.get(day) ?? 0) + secs);
+        byDay.set(e.start.slice(0, 10), (byDay.get(e.start.slice(0, 10)) ?? 0) + secs);
+        const pl = projLabel(e.project_id);
+        byProject.set(pl, (byProject.get(pl) ?? 0) + secs);
       }
       const lines = entries
         .slice()
@@ -57,16 +68,21 @@ server.registerTool(
         .map((e: TimeEntry) =>
           `${e.start.slice(0, 16).replace("T", " ")}  ${fmtDuration(e.duration).padEnd(8)}  ` +
           `${e.description ?? "(no description)"}` +
-          `${e.project_id ? `  [proj ${e.project_id}]` : ""}${e.task_id ? `  [task ${e.task_id}]` : ""}`,
+          `${e.project_id ? `  [${projLabel(e.project_id)}]` : ""}${e.task_id ? `  [task ${e.task_id}]` : ""}`,
         );
-      const daySummary = [...byDay.entries()]
-        .sort()
-        .map(([d, s]) => `  ${d}: ${fmtDuration(s)}`)
+      const daySummary = [...byDay.entries()].sort().map(([d, s]) => `  ${d}: ${fmtDuration(s)}`).join("\n");
+      const projSummary = [...byProject.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .map(([p, s]) => `  ${p}: ${fmtDuration(s)}`)
         .join("\n");
+      const filterNote =
+        (args.project_id ? ` · project ${projLabel(args.project_id)}` : "") +
+        (args.task_id ? ` · task ${args.task_id}` : "");
       const summary =
-        `${entries.length} entries, total ${fmtDuration(total)}\n` +
-        (daySummary ? `Per day:\n${daySummary}\n\n` : "\n") +
-        lines.join("\n");
+        `${entries.length} entries, total ${fmtDuration(total)}${filterNote}\n` +
+        (daySummary ? `Per day:\n${daySummary}\n` : "") +
+        (byProject.size > 1 ? `Per project:\n${projSummary}\n` : "") +
+        "\n" + lines.join("\n");
       return ok(summary, { count: entries.length, total_seconds: total, entries });
     } catch (e) {
       return fail(e);

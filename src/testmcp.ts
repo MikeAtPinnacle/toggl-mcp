@@ -25,10 +25,28 @@ async function main() {
 
   const te = await client.callTool({
     name: "list_time_entries",
-    arguments: { start_date: "2026-06-22", end_date: "2026-06-27" },
+    arguments: { start_date: "2026-06-20", end_date: "2026-06-27" },
   });
   const teText = (te.content as any[])[0]?.text ?? "";
-  console.log("\n[list_time_entries]\n" + teText.split("\n").slice(0, 4).join("\n"));
+  console.log("\n[list_time_entries]\n" + teText.split("\n").slice(0, 6).join("\n"));
+
+  // Filter verification: pick a project_id that appears, re-query, assert all match.
+  const entries = (te.structuredContent as any)?.entries ?? [];
+  const pid = entries.map((e: any) => e.project_id).find((p: any) => p);
+  if (pid) {
+    const filtered = await client.callTool({
+      name: "list_time_entries",
+      arguments: { start_date: "2026-06-20", end_date: "2026-06-27", project_id: pid },
+    });
+    const fEntries = (filtered.structuredContent as any)?.entries ?? [];
+    const allMatch = fEntries.every((e: any) => e.project_id === pid);
+    console.log(
+      `\n[list_time_entries project_id=${pid}] ${fEntries.length}/${entries.length} entries, all match project: ${allMatch}`,
+    );
+    if (!allMatch) throw new Error("project filter returned non-matching entries");
+  } else {
+    console.log("\n[filter] no project_id present in range — skipped filter assertion");
+  }
 
   await client.close();
   console.log("\nOK: MCP protocol round-trip succeeded.");

@@ -4,7 +4,7 @@ A small local **MCP server** for the [Toggl Track API v9](https://engineering.to
 
 | Tool | What it does |
 |---|---|
-| `list_time_entries` | List your time entries for a date range (defaults to last 7 days) with per-day + total hours. |
+| `list_time_entries` | List your time entries for a date range (defaults to last 7 days), optionally filtered by project and/or task, with per-day, per-project, and total hours. |
 | `list_projects` | List your projects (to find the `project_id` the write tools need). |
 | `create_task` | Create a task under a project. |
 | `log_time` | Log a completed time entry, or start a running timer. Attach to a project/task. |
@@ -66,6 +66,8 @@ Once the server is registered, just ask Claude in plain language — it picks th
 |---|---|
 | "List my Toggl time entries for this week" | `list_time_entries` |
 | "What did I track between June 1 and June 15?" | `list_time_entries` |
+| "How much time did I spend on the NHSNLink project this month?" | `list_projects` → `list_time_entries` (project filter) |
+| "Show my entries for that task last week" | `list_time_entries` (task filter) |
 | "Show my Toggl projects" | `list_projects` |
 | "Add a task called *Write design doc* to the NHSNLink project" | `list_projects` → `create_task` |
 | "Log 90 minutes to the Lantana Group project for *code review*" | `list_projects` → `log_time` |
@@ -73,9 +75,13 @@ Once the server is registered, just ask Claude in plain language — it picks th
 
 ### Tool inputs (for direct/programmatic calls)
 
-**`list_time_entries`** — dates accept `YYYY-MM-DD` or RFC3339; `end_date` is exclusive; both default to the last 7 days.
-```json
+**`list_time_entries`** — dates accept `YYYY-MM-DD` or RFC3339; `end_date` is exclusive; both default to the last 7 days. Optionally filter by `project_id` and/or `task_id` (filtered client-side, since the Toggl endpoint only takes dates). Output includes per-day and per-project breakdowns with resolved project names.
+```jsonc
+// whole range
 { "start_date": "2026-06-22", "end_date": "2026-06-29" }
+
+// just one project
+{ "start_date": "2026-06-01", "end_date": "2026-07-01", "project_id": 219977559 }
 ```
 Returns a text summary plus `structuredContent` with `{ count, total_seconds, entries[] }`:
 ```
